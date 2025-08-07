@@ -7,7 +7,7 @@ A Model Context Protocol (MCP) server that enables AI applications to search for
 - **Search Music Videos**: Find music videos on YouTube with customizable search parameters
 - **Get Video Details**: Retrieve comprehensive information about specific videos
 - **Get Playlist Items**: List videos from public playlists
-- **Playlist Management**: Basic framework for creating and managing playlists (requires OAuth setup)
+- **Playlist Management**: Complete playlist management including creating, editing, and managing playlists (requires OAuth setup)
 
 ## Setup
 
@@ -16,13 +16,13 @@ A Model Context Protocol (MCP) server that enables AI applications to search for
 - Node.js 18 or higher
 - A Google Cloud Project with YouTube Data API v3 enabled
 - YouTube Data API key
+- OAuth 2.0 Client credentials (optional, required for playlist management features)
 
 ### Installation
 
 1. Clone this repository:
 ```bash
-git clone <repository-url>
-cd yt-playlist-generator
+git clone https://github.com/danisss9/yt-playlist-generator-mcp-server
 ```
 
 2. Install dependencies:
@@ -41,6 +41,8 @@ npm install
 ```bash
 # Create a .env file
 echo "YOUTUBE_API_KEY=your_api_key_here" > .env
+echo "YOUTUBE_CLIENT_ID=your_client_id_here" >> .env
+echo "YOUTUBE_CLIENT_SECRET=your_client_secret_here" >> .env
 ```
 
 5. Build the TypeScript code:
@@ -78,12 +80,100 @@ Add to your Claude Desktop configuration file:
       "command": "node",
       "args": ["/absolute/path/to/yt-playlist-generator/build/index.js"],
       "env": {
-        "YOUTUBE_API_KEY": "your_youtube_api_key_here"
+        "YOUTUBE_API_KEY": "your_youtube_api_key_here",
+        "YOUTUBE_CLIENT_ID": "your_client_id_here",
+        "YOUTUBE_CLIENT_SECRET": "your_client_secret_here"
       }
     }
   }
 }
 ```
+
+#### Visual Studio Code with GitHub Copilot Configuration
+
+To use this MCP server with GitHub Copilot in Visual Studio Code, you need to configure it in your VS Code settings:
+
+1. **Open VS Code Settings**: Press `Ctrl+,` (Windows/Linux) or `Cmd+,` (macOS)
+
+2. **Search for MCP**: Type "mcp" in the search bar
+
+3. **Add MCP Server Configuration**: Add the following to your VS Code settings JSON:
+
+```json
+{
+  "github.copilot.chat.mcp.servers": {
+    "youtube-playlist-generator": {
+      "command": "node",
+      "args": ["/absolute/path/to/yt-playlist-generator/build/index.js"],
+      "env": {
+        "YOUTUBE_API_KEY": "your_youtube_api_key_here",
+        "YOUTUBE_CLIENT_ID": "your_client_id_here",
+        "YOUTUBE_CLIENT_SECRET": "your_client_secret_here"
+      }
+    }
+  }
+}
+```
+
+**Alternative: Use Settings UI**
+
+1. Go to **File > Preferences > Settings** (or use `Ctrl+,`)
+2. Search for "GitHub Copilot MCP"
+3. Click "Edit in settings.json" next to "Github › Copilot › Chat: Mcp Servers"
+4. Add the server configuration as shown above
+
+**Environment Variables Setup**
+
+For security, you can also set environment variables system-wide instead of in the config:
+
+**Windows (PowerShell)**:
+```powershell
+[Environment]::SetEnvironmentVariable("YOUTUBE_API_KEY", "your_api_key_here", "User")
+[Environment]::SetEnvironmentVariable("YOUTUBE_CLIENT_ID", "your_client_id_here", "User")
+[Environment]::SetEnvironmentVariable("YOUTUBE_CLIENT_SECRET", "your_client_secret_here", "User")
+```
+
+**Windows (Command Prompt)**:
+```cmd
+setx YOUTUBE_API_KEY "your_api_key_here"
+setx YOUTUBE_CLIENT_ID "your_client_id_here"
+setx YOUTUBE_CLIENT_SECRET "your_client_secret_here"
+```
+
+**macOS/Linux**:
+```bash
+export YOUTUBE_API_KEY="your_api_key_here"
+export YOUTUBE_CLIENT_ID="your_client_id_here"
+export YOUTUBE_CLIENT_SECRET="your_client_secret_here"
+# Add to ~/.bashrc, ~/.zshrc, or ~/.profile to persist
+echo 'export YOUTUBE_API_KEY="your_api_key_here"' >> ~/.bashrc
+echo 'export YOUTUBE_CLIENT_ID="your_client_id_here"' >> ~/.bashrc
+echo 'export YOUTUBE_CLIENT_SECRET="your_client_secret_here"' >> ~/.bashrc
+```
+
+Then remove the `env` section from the VS Code configuration:
+
+```json
+{
+  "github.copilot.chat.mcp.servers": {
+    "youtube-playlist-generator": {
+      "command": "node",
+      "args": ["/absolute/path/to/yt-playlist-generator/build/index.js"]
+    }
+  }
+}
+```
+
+**Usage in VS Code**
+
+Once configured, you can use the MCP server through GitHub Copilot Chat:
+
+1. Open Copilot Chat (`Ctrl+Alt+I` or click the chat icon)
+2. Use natural language to interact with YouTube:
+   - "Search for music videos about jazz"
+   - "Create a new playlist called 'My Favorites'"
+   - "Add this video to my playlist"
+   - "Show me details about this YouTube video"
 
 ## Available Tools
 
@@ -132,6 +222,17 @@ Create a new YouTube playlist (requires OAuth authentication).
 - `description` (string, optional): Playlist description
 - `privacy` (enum): "private", "public", or "unlisted"
 
+#### edit_playlist
+Edit existing playlist information (requires OAuth authentication).
+
+**Parameters:**
+- `playlistId` (string): ID of the playlist to edit
+- `title` (string, optional): New title for the playlist
+- `description` (string, optional): New description for the playlist
+- `privacy` (enum, optional): New privacy setting - "private", "public", or "unlisted"
+
+**Note:** At least one field (title, description, or privacy) must be provided to update.
+
 #### add_to_playlist
 Add a video to an existing playlist (requires OAuth authentication).
 
@@ -170,6 +271,7 @@ For full playlist management capabilities, you need to set up OAuth 2.0:
 Add your OAuth credentials to the `.env` file:
 
 ```bash
+YOUTUBE_API_KEY=your_api_key_here
 YOUTUBE_CLIENT_ID=your_client_id_here
 YOUTUBE_CLIENT_SECRET=your_client_secret_here
 ```
@@ -186,6 +288,7 @@ YOUTUBE_CLIENT_SECRET=your_client_secret_here
 
 Once authenticated, you can:
 - Create new playlists
+- Edit existing playlist information (title, description, privacy)
 - Add videos to your playlists
 - List your private playlists
 - Remove videos from playlists
@@ -212,9 +315,7 @@ npm run dev
 ### Project Structure
 ```
 src/
-├── index.ts          # Main server implementation
-├── types/            # TypeScript type definitions
-└── utils/            # Utility functions
+└── index.ts          # Main server implementation
 
 build/                # Compiled JavaScript output
 ```
@@ -256,7 +357,6 @@ MIT License - see LICENSE file for details
 
 - Never commit API keys to version control
 - Use environment variables for sensitive configuration
-- Consider implementing proper OAuth 2.0 for production use
 - Validate all user inputs
 - Implement proper error handling and logging
 

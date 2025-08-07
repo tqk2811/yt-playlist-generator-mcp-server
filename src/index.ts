@@ -357,6 +357,175 @@ server.tool(
   }
 );
 
+// Tool: Edit playlist information
+server.tool(
+  'edit_playlist',
+  'Edit playlist information such as title, description, and privacy status',
+  {
+    playlistId: z.string().describe('ID of the playlist to edit'),
+    title: z.string().optional().describe('New title for the playlist'),
+    description: z.string().optional().describe('New description for the playlist'),
+    privacy: z
+      .enum(['private', 'public', 'unlisted'])
+      .optional()
+      .describe('New privacy setting for the playlist'),
+  },
+  async ({ playlistId, title, description, privacy }) => {
+    if (!isOAuthConfigured()) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(
+              {
+                error: 'Authentication required',
+                message: 'To edit playlists, you need to authenticate with OAuth first.',
+                instruction:
+                  'Use the authenticate_youtube tool with getAuthUrl=true to start the authentication process.',
+                details: { playlistId, title, description, privacy },
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+
+    // Check if at least one field to update is provided
+    if (!title && !description && !privacy) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(
+              {
+                error: 'No updates provided',
+                message:
+                  'Please provide at least one field to update: title, description, or privacy.',
+                details: { playlistId },
+              },
+              null,
+              2
+            ),
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    try {
+      // First, get the current playlist information
+      const currentPlaylist = await authenticatedYoutube!.playlists.list({
+        part: ['snippet', 'status'],
+        id: [playlistId],
+      });
+
+      if (!currentPlaylist.data.items || currentPlaylist.data.items.length === 0) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(
+                {
+                  error: 'Playlist not found',
+                  message: 'The specified playlist was not found or you do not have access to it.',
+                  playlistId,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const playlist = currentPlaylist.data.items[0];
+
+      // Prepare the update request body
+      const updateBody: any = {
+        id: playlistId,
+        snippet: {
+          title: title || playlist.snippet?.title,
+          description: description !== undefined ? description : playlist.snippet?.description,
+        },
+      };
+
+      // Only include status if privacy is being updated
+      if (privacy) {
+        updateBody.status = {
+          privacyStatus: privacy,
+        };
+      }
+
+      // Determine which parts to update
+      const parts = ['snippet'];
+      if (privacy) {
+        parts.push('status');
+      }
+
+      const response = await authenticatedYoutube!.playlists.update({
+        part: parts,
+        requestBody: updateBody,
+      });
+
+      const updatedPlaylist = response.data;
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(
+              {
+                success: true,
+                message: 'Playlist updated successfully!',
+                updates: {
+                  ...(title && { title: `"${playlist.snippet?.title}" → "${title}"` }),
+                  ...(description !== undefined && {
+                    description: `"${playlist.snippet?.description || ''}" → "${description}"`,
+                  }),
+                  ...(privacy && {
+                    privacy: `"${playlist.status?.privacyStatus}" → "${privacy}"`,
+                  }),
+                },
+                playlist: {
+                  id: updatedPlaylist.id,
+                  title: updatedPlaylist.snippet?.title,
+                  description: updatedPlaylist.snippet?.description,
+                  privacy: updatedPlaylist.status?.privacyStatus,
+                  url: `https://www.youtube.com/playlist?list=${updatedPlaylist.id}`,
+                  publishedAt: updatedPlaylist.snippet?.publishedAt,
+                },
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(
+              {
+                error: 'Failed to edit playlist',
+                message: error instanceof Error ? error.message : String(error),
+                details: { playlistId, title, description, privacy },
+              },
+              null,
+              2
+            ),
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
 // Tool: Add video to playlist
 server.tool(
   'add_to_playlist',
