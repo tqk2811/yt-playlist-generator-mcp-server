@@ -87,7 +87,9 @@ Add to your Claude Desktop configuration file:
 
 ## Available Tools
 
-### search_music_videos
+### Read-Only Tools (API Key Authentication)
+
+#### search_music_videos
 Search YouTube for music videos with specified criteria.
 
 **Parameters:**
@@ -95,20 +97,34 @@ Search YouTube for music videos with specified criteria.
 - `maxResults` (number, 1-50, default: 10): Maximum number of results
 - `order` (enum): Sort order - "relevance", "date", "rating", "viewCount", "title"
 
-### get_video_details
+#### get_video_details
 Get detailed information about a specific YouTube video.
 
 **Parameters:**
 - `videoId` (string): YouTube video ID
 
-### get_playlist_items
+#### get_playlist_items
 Retrieve videos from a public YouTube playlist.
 
 **Parameters:**
 - `playlistId` (string): YouTube playlist ID
 - `maxResults` (number, 1-50, default: 25): Maximum number of items
 
-### create_playlist
+### OAuth-Required Tools (Playlist Management)
+
+#### authenticate_youtube
+Authenticate with YouTube OAuth to enable playlist management features.
+
+**Parameters:**
+- `getAuthUrl` (boolean, default: false): Set to true to get the authorization URL
+- `authCode` (string, optional): Authorization code from OAuth flow
+
+#### get_auth_status
+Check current OAuth authentication status.
+
+**Parameters:** None
+
+#### create_playlist
 Create a new YouTube playlist (requires OAuth authentication).
 
 **Parameters:**
@@ -116,36 +132,70 @@ Create a new YouTube playlist (requires OAuth authentication).
 - `description` (string, optional): Playlist description
 - `privacy` (enum): "private", "public", or "unlisted"
 
-### add_to_playlist
+#### add_to_playlist
 Add a video to an existing playlist (requires OAuth authentication).
 
 **Parameters:**
 - `playlistId` (string): Target playlist ID
 - `videoId` (string): Video ID to add
 
-### list_playlists
+#### list_playlists
 List user's playlists (requires OAuth authentication).
 
 **Parameters:**
 - `maxResults` (number, 1-50, default: 25): Maximum number of playlists
+- `mine` (boolean, default: true): List authenticated user's playlists
 
-## OAuth Authentication Setup (Optional)
+#### remove_from_playlist
+Remove a video from a playlist (requires OAuth authentication).
 
-For full playlist management capabilities (creating playlists, adding videos), you'll need to set up OAuth 2.0:
+**Parameters:**
+- `playlistItemId` (string): ID of the playlist item to remove (get from get_playlist_items)
 
-1. In Google Cloud Console, create OAuth 2.0 credentials
-2. Download the credentials JSON file
-3. Implement the OAuth flow in the server code
-4. Handle token refresh and storage
+## OAuth Authentication Setup
 
-Currently, the server provides guidance for manual playlist management when OAuth is not configured.
+For full playlist management capabilities, you need to set up OAuth 2.0:
+
+### 1. Google Cloud Console Setup
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select existing one
+3. Enable the YouTube Data API v3
+4. Go to "Credentials" → "Create Credentials" → "OAuth 2.0 Client ID"
+5. Choose "Desktop Application" as application type
+6. Download the credentials or copy the Client ID and Client Secret
+
+### 2. Environment Configuration
+
+Add your OAuth credentials to the `.env` file:
+
+```bash
+YOUTUBE_CLIENT_ID=your_client_id_here
+YOUTUBE_CLIENT_SECRET=your_client_secret_here
+```
+
+### 3. Authentication Flow
+
+1. Use the `authenticate_youtube` tool with `getAuthUrl: true`
+2. Open the provided URL in your browser
+3. Sign in to your Google account and grant permissions
+4. Copy the authorization code
+5. Use `authenticate_youtube` tool again with the `authCode` parameter
+
+### 4. Using Authenticated Features
+
+Once authenticated, you can:
+- Create new playlists
+- Add videos to your playlists
+- List your private playlists
+- Remove videos from playlists
 
 ## API Limitations
 
-- **API Key Only**: Current implementation uses API key authentication, which limits functionality to read-only operations
-- **Quota Limits**: YouTube API has daily quota limits
-- **Public Content**: Can only access public playlists and videos
+- **Quota Limits**: YouTube API has daily quota limits (10,000 units/day by default)
 - **Rate Limiting**: API calls are subject to rate limiting
+- **OAuth Tokens**: Access tokens expire and need refresh (handled automatically)
+- **Permissions**: OAuth scope determines available operations
 
 ## Development
 
@@ -209,3 +259,7 @@ MIT License - see LICENSE file for details
 - Consider implementing proper OAuth 2.0 for production use
 - Validate all user inputs
 - Implement proper error handling and logging
+
+---
+
+*This project was created using GitHub Copilot*
