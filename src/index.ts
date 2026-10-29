@@ -2,7 +2,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { google, youtube_v3 } from 'googleapis';
 import { z } from 'zod';
-import { OAuth2Client } from 'google-auth-library';
+import { Credentials, OAuth2Client } from 'google-auth-library';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -31,8 +34,43 @@ const OAUTH_PORT = Number(process.env.YOUTUBE_OAUTH_PORT) || 3000;
 const OAUTH_REDIRECT_URI = `http://localhost:${OAUTH_PORT}/oauth2callback`;
 const OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
 
+// Persisted OAuth tokens so a restart does not require signing in again
+// Default: token.json in the project root (one level above build/)
+const TOKEN_PATH =
+  process.env.YOUTUBE_TOKEN_PATH ||
+  join(dirname(fileURLToPath(import.meta.url)), '..', 'token.json');
+
+function saveTokens(tokens: Credentials): void {
+  try {
+    mkdirSync(dirname(TOKEN_PATH), { recursive: true });
+    writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2), { mode: 0o600 });
+  } catch (error) {
+    console.error('Failed to save OAuth tokens:', error instanceof Error ? error.message : error);
+  }
+}
+
+function deleteTokens(): void {
+  rmSync(TOKEN_PATH, { force: true });
+}
+
 if (CLIENT_ID && CLIENT_SECRET) {
-  oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, OAUTH_REDIRECT_URI);
+  const client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, OAUTH_REDIRECT_URI);
+  oauth2Client = client;
+
+  // Refreshed access tokens usually come without a refresh_token, keep the stored one
+  client.on('tokens', (tokens) => {
+    saveTokens({ ...client.credentials, ...tokens });
+  });
+
+  if (existsSync(TOKEN_PATH)) {
+    try {
+      client.setCredentials(JSON.parse(readFileSync(TOKEN_PATH, 'utf8')));
+      authenticatedYoutube = google.youtube({ version: 'v3', auth: client });
+      console.error(`Loaded OAuth tokens from ${TOKEN_PATH}`);
+    } catch (error) {
+      console.error('Failed to load OAuth tokens:', error instanceof Error ? error.message : error);
+    }
+  }
 }
 
 // Helper function to open a URL in the default browser
@@ -221,6 +259,7 @@ server.tool(
       const code = authCode ?? (await waitForAuthCode());
       const { tokens } = await oauth2Client.getToken(code);
       oauth2Client.setCredentials(tokens);
+      saveTokens(tokens);
 
       // Create authenticated YouTube client
       authenticatedYoutube = google.youtube({
@@ -1052,12 +1091,38 @@ server.tool(
               oauthConfigured: oauth2Client !== null,
               authenticated: isOAuthConfigured(),
               clientConfigured: !!(CLIENT_ID && CLIENT_SECRET),
+              tokenPath: TOKEN_PATH,
+              tokenSaved: existsSync(TOKEN_PATH),
               message: isOAuthConfigured()
                 ? 'OAuth is configured and authenticated. You can create and manage playlists.'
                 : oauth2Client
                 ? 'OAuth is configured but not authenticated. Use authenticate_youtube tool to authenticate.'
                 : 'OAuth not configured. Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET environment variables.',
             },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+);
+
+// Tool: Sign out and delete the saved OAuth tokens
+server.tool(
+  'logout_youtube',
+  'Sign out of YouTube and delete the saved OAuth tokens',
+  {},
+  async () => {
+    oauth2Client?.setCredentials({});
+    authenticatedYoutube = null;
+    deleteTokens();
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(
+            { success: true, message: `Signed out. Deleted saved tokens at ${TOKEN_PATH}.` },
             null,
             2
           ),

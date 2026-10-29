@@ -69,3 +69,7 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+
+# Saved OAuth tokens
+token.json
+local/

@@ -10,11 +10,6 @@
 - Vấn đề: Google khuyến nghị PKCE (S256) cho installed app; dùng `generateCodeVerifierAsync()` của google-auth-library.
 - Ghi ngày: 2026-10-29.
 
-### [Thấp] Token OAuth chỉ lưu trong RAM
-- Vị trí: `src/index.ts`, nơi `setCredentials`.
-- Vấn đề: restart MCP server là phải đăng nhập lại; nên lưu refresh token ra file (đã có `access_type: offline`).
-- Ghi ngày: 2026-10-29.
-
 ### [Thấp] Retry trong add_videos_to_playlist có thể thêm trùng video
 - Vị trí: `src/index.ts`, tool `add_videos_to_playlist`.
 - Vấn đề: lỗi 5xx/timeout sau khi server đã chèn xong thì retry sẽ chèn lần nữa (playlist cho phép trùng).
@@ -23,4 +18,9 @@
 ### [Thấp] get_playlist_items không phân trang
 - Vị trí: `src/index.ts`, tool `get_playlist_items`.
 - Vấn đề: chỉ trả tối đa 50 bài, playlist dài hơn bị thiếu; nên thêm `pageToken` / tự lặp hết.
+- Ghi ngày: 2026-10-29.
+
+### [Vừa] add_videos_to_playlist trả lỗi rỗng và không chèn được vào vị trí cụ thể
+- Vị trí: `src/index.ts`, tool `add_videos_to_playlist` (khối catch).
+- Vấn đề: có lần insert lỗi trả `error: ""` nên không biết lý do, cũng không retry; video vẫn hợp lệ, chèn lại thì thành công. Nên lấy message từ `error.response.data` / `errors[0].reason`, coi lỗi không rõ là retryable, và thêm tham số `position` để chèn bù đúng chỗ.
 - Ghi ngày: 2026-10-29.
