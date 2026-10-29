@@ -3,6 +3,9 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { google, youtube_v3 } from 'googleapis';
 import { z } from 'zod';
 import { OAuth2Client } from 'google-auth-library';
+import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 
 const API_KEY = process.env.YOUTUBE_API_KEY;
 const CLIENT_ID = process.env.YOUTUBE_CLIENT_ID;
@@ -23,12 +26,103 @@ const youtube = google.youtube({
 let oauth2Client: OAuth2Client | null = null;
 let authenticatedYoutube: youtube_v3.Youtube | null = null;
 
+// Loopback redirect (Google no longer supports the OOB flow)
+const OAUTH_PORT = Number(process.env.YOUTUBE_OAUTH_PORT) || 3000;
+const OAUTH_REDIRECT_URI = `http://localhost:${OAUTH_PORT}/oauth2callback`;
+const OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
+
 if (CLIENT_ID && CLIENT_SECRET) {
-  oauth2Client = new google.auth.OAuth2(
-    CLIENT_ID,
-    CLIENT_SECRET,
-    'urn:ietf:wg:oauth:2.0:oob' // For installed applications
-  );
+  oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, OAUTH_REDIRECT_URI);
+}
+
+// Helper function to open a URL in the default browser
+function openBrowser(url: string): void {
+  const [command, args] =
+    process.platform === 'win32'
+      ? ['rundll32', ['url.dll,FileProtocolHandler', url]]
+      : process.platform === 'darwin'
+      ? ['open', [url]]
+      : ['xdg-open', [url]];
+  const child = spawn(command, args, { stdio: 'ignore', detached: true });
+  child.on('error', (error) => console.error('Failed to open browser:', error.message));
+  child.unref();
+}
+
+// Helper function to host a local callback server and wait for the authorization code
+// Only one loopback flow at a time; concurrent calls share it
+let pendingAuthCode: Promise<string> | null = null;
+
+function waitForAuthCode(): Promise<string> {
+  if (!pendingAuthCode) {
+    pendingAuthCode = runLoopbackFlow().finally(() => {
+      pendingAuthCode = null;
+    });
+  }
+  return pendingAuthCode;
+}
+
+function runLoopbackFlow(): Promise<string> {
+  const state = randomBytes(16).toString('hex');
+  const authUrl = getAuthUrl(state);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const httpServer = createServer((req, res) => {
+      const url = new URL(req.url ?? '/', OAUTH_REDIRECT_URI);
+      if (url.pathname !== '/oauth2callback' || settled) {
+        res.writeHead(404, { Connection: 'close' }).end();
+        return;
+      }
+      if (url.searchParams.get('state') !== state) {
+        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8', Connection: 'close' });
+        res.end('Invalid state parameter.');
+        return;
+      }
+
+      const code = url.searchParams.get('code');
+      const error = url.searchParams.get('error');
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', Connection: 'close' });
+      res.end(
+        code
+          ? 'Authentication successful. You can close this tab.'
+          : `Authentication failed: ${error ?? 'missing code'}`
+      );
+
+      res.on('finish', () =>
+        finish(code ? null : new Error(error ?? 'Missing authorization code'), code)
+      );
+    });
+
+    const timer = setTimeout(
+      () => finish(new Error('Timed out waiting for OAuth callback'), null),
+      OAUTH_TIMEOUT_MS
+    );
+
+    function finish(error: Error | null, code: string | null): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      httpServer.close();
+      httpServer.closeAllConnections();
+      if (error || !code) reject(error ?? new Error('Missing authorization code'));
+      else resolve(code);
+    }
+
+    httpServer.on('error', (error: NodeJS.ErrnoException) => {
+      finish(
+        error.code === 'EADDRINUSE'
+          ? new Error(`Port ${OAUTH_PORT} is in use. Set YOUTUBE_OAUTH_PORT to a free port.`)
+          : error,
+        null
+      );
+    });
+    httpServer.listen(OAUTH_PORT, 'localhost', () => {
+      console.error(`OAuth callback server listening on ${OAUTH_REDIRECT_URI}`);
+      console.error(`If the browser does not open, visit: ${authUrl}`);
+      openBrowser(authUrl);
+    });
+  });
 }
 
 // Create MCP server
@@ -43,7 +137,7 @@ function isOAuthConfigured(): boolean {
 }
 
 // Helper function to get OAuth authorization URL
-function getAuthUrl(): string {
+function getAuthUrl(state?: string): string {
   if (!oauth2Client) {
     throw new Error(
       'OAuth client not configured. Please set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET.'
@@ -52,6 +146,7 @@ function getAuthUrl(): string {
 
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
+    state,
     scope: [
       'https://www.googleapis.com/auth/youtube',
       'https://www.googleapis.com/auth/youtube.force-ssl',
@@ -103,12 +198,14 @@ server.tool(
             text: JSON.stringify(
               {
                 authUrl,
+                redirectUri: OAUTH_REDIRECT_URI,
                 instructions: [
                   '1. Open the provided URL in your browser',
                   '2. Sign in to your Google account',
                   '3. Grant permissions to the application',
-                  '4. Copy the authorization code from the browser',
+                  '4. Copy the "code" parameter from the localhost URL you are redirected to',
                   '5. Call this tool again with the authCode parameter',
+                  'Or call this tool without arguments to open the browser and capture the code automatically.',
                 ],
               },
               null,
@@ -119,27 +216,10 @@ server.tool(
       };
     }
 
-    if (!authCode) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: JSON.stringify(
-              {
-                error: 'Missing authorization code',
-                message:
-                  'Please provide either getAuthUrl=true to get the auth URL, or authCode with your authorization code.',
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
-    }
-
     try {
-      const { tokens } = await oauth2Client.getToken(authCode);
+      // No code given: host the loopback server, open the browser and wait for the callback
+      const code = authCode ?? (await waitForAuthCode());
+      const { tokens } = await oauth2Client.getToken(code);
       oauth2Client.setCredentials(tokens);
 
       // Create authenticated YouTube client
@@ -523,6 +603,123 @@ server.tool(
         isError: true,
       };
     }
+  }
+);
+
+// Tool: Add multiple videos to playlist (sequential inserts, the API has no batch insert)
+server.tool(
+  'add_videos_to_playlist',
+  'Add multiple videos to a YouTube playlist in order (each video costs 50 quota units)',
+  {
+    playlistId: z.string().describe('ID of the playlist to add videos to'),
+    videoIds: z
+      .array(z.string())
+      .min(1)
+      .max(500)
+      .describe('YouTube video IDs to add, in the desired order'),
+  },
+  async ({ playlistId, videoIds }) => {
+    if (!isOAuthConfigured()) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(
+              {
+                error: 'Authentication required',
+                message: 'To add videos to playlists, you need to authenticate with OAuth first.',
+                instruction: 'Use the authenticate_youtube tool to start the authentication process.',
+              },
+              null,
+              2
+            ),
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const maxAttempts = 3;
+    const added: { videoId: string; playlistItemId: string | null | undefined }[] = [];
+    const failed: { videoId: string; error: string }[] = [];
+
+    for (const [index, videoId] of videoIds.entries()) {
+      for (let attempt = 1; ; attempt++) {
+        try {
+          const response = await authenticatedYoutube!.playlistItems.insert({
+            part: ['snippet'],
+            requestBody: {
+              snippet: {
+                playlistId,
+                resourceId: { kind: 'youtube#video', videoId },
+              },
+            },
+          });
+          added.push({ videoId, playlistItemId: response.data.id });
+          break;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const apiError = error as { code?: number | string; errors?: { reason?: string }[] };
+          const status = Number(apiError.code);
+          const reason = apiError.errors?.[0]?.reason ?? '';
+          // Quota exhausted or playlist unusable: every following insert would fail too
+          if (/quotaExceeded|dailyLimitExceeded|playlistNotFound/.test(reason)) {
+            failed.push({ videoId, error: message });
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify(
+                    {
+                      success: false,
+                      stoppedEarly: true,
+                      reason,
+                      playlistId,
+                      addedCount: added.length,
+                      failedCount: failed.length,
+                      added,
+                      failed,
+                      notAttempted: videoIds.slice(index + 1),
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+              isError: added.length === 0,
+            };
+          }
+          // Only rate limits and server errors are worth retrying
+          const retryable = status === 429 || status >= 500 || /rateLimitExceeded/i.test(reason);
+          if (!retryable || attempt >= maxAttempts) {
+            failed.push({ videoId, error: message });
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+        }
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(
+            {
+              success: failed.length === 0,
+              playlistId,
+              addedCount: added.length,
+              failedCount: failed.length,
+              added,
+              failed,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+      isError: failed.length > 0 && added.length === 0,
+    };
   }
 );
 
